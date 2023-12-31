@@ -1,5 +1,7 @@
 #![allow(clippy::type_complexity)]
 #![allow(clippy::too_many_arguments)]
+// disable console on windows for release builds
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod countdown;
 mod game_over;
@@ -16,8 +18,9 @@ use std::f32::consts::TAU;
 use std::{fs::File, io::Write};
 
 use bevy::{
-    audio::Volume, core_pipeline::clear_color::ClearColorConfig, log::LogPlugin,
-    pbr::CascadeShadowConfigBuilder, prelude::*, time::Stopwatch, transform::TransformSystem,
+    asset::AssetMetaCheck, audio::Volume, core_pipeline::clear_color::ClearColorConfig,
+    log::LogPlugin, pbr::CascadeShadowConfigBuilder, prelude::*, render::view::NoFrustumCulling,
+    time::Stopwatch, transform::TransformSystem,
 };
 #[cfg(feature = "inspector")]
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
@@ -170,6 +173,9 @@ impl Default for JumpCooldown {
 #[derive(Event)]
 struct FinishedEvent;
 
+#[derive(Component)]
+pub struct MainCamera;
+
 const LAVA: f32 = -200.;
 
 fn main() {
@@ -182,6 +188,7 @@ fn main() {
         })
         .set(WindowPlugin {
             primary_window: Some(Window {
+                title: "Combine Racers".into(),
                 fit_canvas_to_parent: true,
                 ..default()
             }),
@@ -191,6 +198,11 @@ fn main() {
 
     #[cfg(feature = "debugdump")]
     let default_plugins = default_plugins.disable::<bevy::log::LogPlugin>();
+
+    // Workaround for Bevy attempting to load .meta files in wasm builds. On itch,
+    // the CDN servers HTTP 403 errors instead of 404 when files don't exists, which
+    // causes Bevy to break.
+    app.insert_resource(AssetMetaCheck::Never);
 
     app.add_plugins(default_plugins);
 
@@ -308,8 +320,8 @@ fn main() {
 // This is the list of "things in the game I want to be able to do based on input"
 #[derive(Actionlike, PartialEq, Eq, Clone, Copy, Hash, Debug, Reflect)]
 enum Action {
-    Left,
-    Right,
+    Back,
+    Forward,
     LeftRight,
     RotateLeft,
     RotateRight,
@@ -331,14 +343,17 @@ fn spawn_camera(mut commands: Commands, zoom: Res<Zoom>) {
         UiCameraConfig { show_ui: false },
     ));
 
-    commands.spawn(Camera3dBundle {
-        camera_3d: Camera3d {
-            clear_color: ClearColorConfig::None,
-            ..default()
+    commands.spawn((
+        Camera3dBundle {
+            camera_3d: Camera3d {
+                clear_color: ClearColorConfig::None,
+                ..default()
+            },
+            transform: Transform::from_xyz(0., 0., zoom.target),
+            ..Default::default()
         },
-        transform: Transform::from_xyz(0., 0., zoom.target),
-        ..Default::default()
-    });
+        MainCamera,
+    ));
 }
 
 fn decorate_track(
@@ -400,7 +415,7 @@ fn decorate_track(
     }
 
     if decorated {
-        next_state.set(GameState::MainMenu);
+        next_state.set(GameState::Pipelines);
     }
 }
 
@@ -411,11 +426,13 @@ fn setup_game(
 ) {
     commands.set_image_repeating(assets.background.clone());
 
-    commands.spawn(
+    commands.spawn((
         BackgroundImageBundle::from_image(assets.background.clone(), materials.as_mut())
             .with_movement_scale(1.0)
             .at_z_layer(0.1),
-    );
+        // Workaround for https://github.com/BraymatterOrg/bevy_tiling_background/issues/22
+        NoFrustumCulling,
+    ));
 
     commands.spawn(DirectionalLightBundle {
         directional_light: DirectionalLight {
@@ -466,10 +483,10 @@ fn spawn_player(mut commands: Commands, game_assets: Res<GameAssets>) {
     axes.insert(LockedAxes::TRANSLATION_LOCKED_Z);
 
     let mut input_map = InputMap::new([
-        (KeyCode::Left, Action::Left),
-        (KeyCode::A, Action::Left),
-        (KeyCode::Right, Action::Right),
-        (KeyCode::D, Action::Right),
+        (KeyCode::Left, Action::Back),
+        (KeyCode::A, Action::Back),
+        (KeyCode::Right, Action::Forward),
+        (KeyCode::D, Action::Forward),
         (KeyCode::Q, Action::RotateLeft),
         (KeyCode::E, Action::RotateRight),
         (KeyCode::Space, Action::Jump),
@@ -478,8 +495,8 @@ fn spawn_player(mut commands: Commands, game_assets: Res<GameAssets>) {
     ]);
 
     input_map.insert_multiple([
-        (GamepadButtonType::DPadLeft, Action::Left),
-        (GamepadButtonType::DPadRight, Action::Right),
+        (GamepadButtonType::DPadLeft, Action::Back),
+        (GamepadButtonType::DPadRight, Action::Forward),
         (GamepadButtonType::LeftTrigger, Action::RotateLeft),
         (GamepadButtonType::RightTrigger, Action::RotateRight),
         (GamepadButtonType::South, Action::Jump),
@@ -490,16 +507,17 @@ fn spawn_player(mut commands: Commands, game_assets: Res<GameAssets>) {
     input_map.insert_multiple([
         (
             SingleAxis::negative_only(AxisType::Gamepad(GamepadAxisType::LeftStickX), -0.3),
-            Action::Left,
+            Action::Back,
         ),
         (
             SingleAxis::positive_only(AxisType::Gamepad(GamepadAxisType::LeftStickX), 0.3),
-            Action::Right,
+            Action::Forward,
         ),
     ]);
 
     commands
         .spawn((
+            Name::new("Player"),
             SceneBundle {
                 scene: game_assets.combine.clone(),
                 ..default()
@@ -612,10 +630,10 @@ fn player_movement(
     {
         force.force = Vec3::ZERO;
 
-        if action_state.pressed(Action::Left) && **jump_wheels >= 1 {
+        if action_state.pressed(Action::Back) && **jump_wheels >= 1 {
             force.force = transform.rotation * -Vec3::X * DRIVE_FORCE;
         }
-        if action_state.pressed(Action::Right) && **jump_wheels >= 1 {
+        if action_state.pressed(Action::Forward) && **jump_wheels >= 1 {
             force.force = transform.rotation * Vec3::X * DRIVE_FORCE;
         }
         if action_state.pressed(Action::RotateLeft) {
