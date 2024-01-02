@@ -41,12 +41,12 @@ use save::SavePlugin;
 use settings::SfxSetting;
 use ui::{TrickText, UiPlugin};
 
-const ROT_SPEED: f32 = 8.;
+const ROT_SPEED: f32 = 11.;
 const JUMP_IMPULSE: f32 = 175.;
-const DRIVE_FORCE: f32 = 400.;
-const BASE_SPEED_LIMIT: f32 = 20.;
-const BOOST_SPEED_LIMIT: f32 = 30.;
-const BASE_BOOST_TIMER: f32 = 2.;
+const DRIVE_FORCE: f32 = 800.;
+const BASE_SPEED_LIMIT: f32 = 30.;
+const BOOST_SPEED_LIMIT: f32 = 10.;
+const BASE_BOOST_TIMER: f32 = 10.;
 
 #[derive(Component, Default, Deref, DerefMut)]
 struct WheelsOnGround(u8);
@@ -810,6 +810,7 @@ fn track_trick(
             Ref<WheelsOnGround>,
             &BonkStatus,
             &mut Boost,
+            &mut SpeedLimit,
         ),
         With<Player>,
     >,
@@ -817,8 +818,16 @@ fn track_trick(
     game_audio: Res<AudioAssets>,
     audio_setting: Res<SfxSetting>,
 ) {
-    for (mut trick_status, mut last_trick, velocity, transform, wheels, bonk, mut boost) in
-        query.iter_mut()
+    for (
+        mut trick_status,
+        mut last_trick,
+        velocity,
+        transform,
+        wheels,
+        bonk,
+        mut boost,
+        mut speed_limit,
+    ) in query.iter_mut()
     {
         if **bonk {
             trick_status.reset();
@@ -880,6 +889,9 @@ fn track_trick(
 
                 **last_trick = trick.clone();
 
+                **speed_limit += BOOST_SPEED_LIMIT;
+                info!("speed limit now {}", **speed_limit);
+
                 commands.spawn(AudioBundle {
                     source: game_audio.trick.clone(),
                     settings: PlaybackSettings::DESPAWN
@@ -896,11 +908,6 @@ fn boost(time: Res<Time>, mut query: Query<(&mut Boost, &mut SpeedLimit), With<P
     for (mut boost, mut speed_limit) in query.iter_mut() {
         if boost.remaining <= 0. {
             return;
-        }
-
-        if speed_limit.0 == BASE_SPEED_LIMIT {
-            **speed_limit = BOOST_SPEED_LIMIT;
-            info!("speed limit now {}", **speed_limit);
         }
 
         boost.remaining -= time.delta_seconds();
